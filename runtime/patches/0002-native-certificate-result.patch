@@ -1,0 +1,121 @@
+--- a/src/eap_peer/eap.c
++++ b/src/eap_peer/eap.c
+@@ -2144,6 +2144,8 @@
+ 		}
+ 		break;
+ 	case TLS_CERT_CHAIN_FAILURE:
++		if (sm->eapol_cb->notify_cert_error)
++			sm->eapol_cb->notify_cert_error(sm->eapol_ctx);
+ 		wpa_msg(sm->msg_ctx, MSG_INFO, WPA_EVENT_EAP_TLS_CERT_ERROR
+ 			"reason=%d depth=%d subject='%s' err='%s'",
+ 			data->cert_fail.reason,
+--- a/src/eap_peer/eap.h
++++ b/src/eap_peer/eap.h
+@@ -281,6 +281,14 @@
+ 	 * @len: Length of anonymous identity in octets
+ 	 */
+ 	void (*set_anon_id)(void *ctx, const u8 *id, size_t len);
++
++	/**
++	 * notify_cert_error - Notification of TLS_CERT_CHAIN_FAILURE
++	 * @ctx: eapol_ctx from eap_peer_sm_init() call
++	 *
++	 * This optional callback reports the typed validation event, not text.
++	 */
++	void (*notify_cert_error)(void *ctx);
+ };
+ 
+ /**
+--- a/src/eapol_supp/eapol_supp_sm.c
++++ b/src/eapol_supp/eapol_supp_sm.c
+@@ -2032,6 +2032,15 @@
+ }
+ 
+ 
++static void eapol_sm_notify_cert_error(void *ctx)
++{
++	struct eapol_sm *sm = ctx;
++
++	if (sm->ctx->cert_error_cb)
++		sm->ctx->cert_error_cb(sm->ctx->ctx);
++}
++
++
+ static void eapol_sm_notify_status(void *ctx, const char *status,
+ 				   const char *parameter)
+ {
+@@ -2104,7 +2113,8 @@
+ 	eapol_sm_eap_proxy_notify_sim_status,
+ 	eapol_sm_get_eap_proxy_imsi,
+ #endif /* CONFIG_EAP_PROXY */
+-	eapol_sm_set_anon_id
++	eapol_sm_set_anon_id,
++	eapol_sm_notify_cert_error
+ };
+ 
+ 
+--- a/src/eapol_supp/eapol_supp_sm.h
++++ b/src/eapol_supp/eapol_supp_sm.h
+@@ -264,6 +264,12 @@
+ 	 * cert_in_cb - Include server certificates in callback
+ 	 */
+ 	int cert_in_cb;
++
++	/**
++	 * cert_error_cb - Notification of TLS_CERT_CHAIN_FAILURE (optional)
++	 * @ctx: Callback context (ctx)
++	 */
++	void (*cert_error_cb)(void *ctx);
+ 
+ 	/**
+ 	 * status_cb - Notification of a change in EAP status
+--- a/wpa_supplicant/eapol_test.c
++++ b/wpa_supplicant/eapol_test.c
+@@ -51,6 +51,7 @@
+ 	int eapol_test_num_reauths;
+ 	int no_mppe_keys;
+ 	int num_mppe_ok, num_mppe_mismatch;
++	u32 num_cert_errors;
+ 	int req_eap_key_name;
+ 
+ 	u8 radius_identifier;
+@@ -568,6 +569,16 @@
+ #endif /* CONFIG_CTRL_IFACE || !CONFIG_NO_STDOUT_DEBUG */
+ 
+ 
++static void eapol_test_cert_error_cb(void *ctx)
++{
++	struct eapol_test_data *e = ctx;
++
++	/* Saturate rather than wrap the typed validation-event counter. */
++	if (e->num_cert_errors < 0xffffffffU)
++		e->num_cert_errors++;
++}
++
++
+ static void eapol_test_cert_cb(void *ctx, struct tls_cert_data *cert,
+ 			       const char *cert_hash)
+ {
+@@ -674,6 +685,7 @@
+ 	ctx->openssl_ciphers = wpa_s->conf->openssl_ciphers;
+ 	ctx->eap_param_needed = eapol_test_eap_param_needed;
+ 	ctx->cert_cb = eapol_test_cert_cb;
++	ctx->cert_error_cb = eapol_test_cert_error_cb;
+ 	ctx->cert_in_cb = 1;
+ 	ctx->set_anon_id = eapol_test_set_anon_id;
+ 
+@@ -1725,11 +1737,12 @@
+ 		ret = -4;
+ 	if (eapol_test.secret_file_mode)
+ 		printf("EAPOL_TEST_RESULT accept=%d reject=%d timeout=%d "
+-		       "mppe_ok=%d mppe_mismatch=%d\n",
++		       "mppe_ok=%d mppe_mismatch=%d cert_error=%u\n",
+ 		       eapol_test.radius_access_accept_received,
+ 		       eapol_test.radius_access_reject_received,
+ 		       eapol_test.auth_timed_out, eapol_test.num_mppe_ok,
+-		       eapol_test.num_mppe_mismatch);
++		       eapol_test.num_mppe_mismatch,
++		       (unsigned int) eapol_test.num_cert_errors);
+ 	if (ret)
+ 		printf("FAILURE\n");
+ 	else

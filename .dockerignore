@@ -1,0 +1,13 @@
+# Use an allowlist so credentials, local data, and unrelated files never enter the context.
+**
+!Dockerfile
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!pyproject.toml
+!requirements.lock
+!src/
+!src/**
+!runtime/
+!runtime/**
+**/__pycache__
+**/*.pyc

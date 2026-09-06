@@ -1,0 +1,564 @@
+--- a/src/radius/radius.c
++++ b/src/radius/radius.c
+@@ -129,7 +129,7 @@
+ 	if (msg == NULL)
+ 		return;
+ 
+-	wpabuf_free(msg->buf);
++	wpabuf_clear_free(msg->buf);
+ 	os_free(msg->attr_pos);
+ 	os_free(msg);
+ }
+@@ -707,8 +707,9 @@
+ }
+ 
+ 
+-struct radius_attr_hdr * radius_msg_add_attr(struct radius_msg *msg, u16 type,
+-					     const u8 *data, size_t data_len)
++static struct radius_attr_hdr *
++radius_msg_add_attr_internal(struct radius_msg *msg, u16 type,
++			     const u8 *data, size_t data_len, bool raw)
+ {
+ 	size_t buf_needed, max_len;
+ 	struct radius_attr_hdr *attr = NULL;
+@@ -718,7 +719,7 @@
+ 	if (TEST_FAIL())
+ 		return NULL;
+ 
+-	if (type > 255) {
++	if (!raw && type > 255) {
+ 		if (!radius_is_ext_type(type >> 8)) {
+ 			wpa_printf(MSG_ERROR,
+ 				   "%s: Undefined extended type %d.%d",
+@@ -727,12 +728,12 @@
+ 		}
+ 		ext_type = type & 0xff;
+ 		type >>= 8;
+-	} else if (radius_is_ext_type(type)) {
++	} else if (!raw && radius_is_ext_type(type)) {
+ 		wpa_printf(MSG_ERROR, "%s: Unexpected extended type use for %d",
+ 			   __func__, type);
+ 	}
+ 
+-	if (radius_is_long_ext_type(type)) {
++	if (!raw && radius_is_long_ext_type(type)) {
+ 		size_t hdr_len = sizeof(struct radius_attr_hdr_ext) + 1;
+ 		size_t plen = 255 - hdr_len;
+ 		size_t num;
+@@ -742,7 +743,7 @@
+ 		if (num == 0)
+ 			num = 1;
+ 		buf_needed = num * hdr_len + data_len;
+-	} else if (radius_is_ext_type(type)) {
++	} else if (!raw && radius_is_ext_type(type)) {
+ 		max_len = RADIUS_MAX_EXT_ATTR_LEN;
+ 		buf_needed = sizeof(struct radius_attr_hdr_ext) + data_len;
+ 	} else {
+@@ -763,7 +764,7 @@
+ 		msg->hdr = wpabuf_mhead(msg->buf);
+ 	}
+ 
+-	if (radius_is_long_ext_type(type)) {
++	if (!raw && radius_is_long_ext_type(type)) {
+ 		size_t plen = 255 - sizeof(struct radius_attr_hdr_ext) - 1;
+ 		size_t alen;
+ 
+@@ -777,14 +778,14 @@
+ 			ext->length = sizeof(*ext) + 1 + alen;
+ 			ext->ext_type = ext_type;
+ 			wpabuf_put_u8(msg->buf, data_len > alen ? 0x80 : 0);
+-			wpabuf_put_data(msg->buf, data, data_len);
++			wpabuf_put_data(msg->buf, data, alen);
+ 			data += alen;
+ 			data_len -= alen;
+ 			if (radius_msg_add_attr_to_array(
+ 				    msg, (struct radius_attr_hdr *) ext))
+ 				return NULL;
+ 		} while (data_len > 0);
+-	} else if (radius_is_ext_type(type)) {
++	} else if (!raw && radius_is_ext_type(type)) {
+ 		ext = wpabuf_put(msg->buf, sizeof(struct radius_attr_hdr_ext));
+ 		attr = (struct radius_attr_hdr *) ext;
+ 		ext->type = type;
+@@ -803,6 +804,20 @@
+ 	}
+ 
+ 	return attr;
++}
++
++
++struct radius_attr_hdr * radius_msg_add_attr(struct radius_msg *msg, u16 type,
++					     const u8 *data, size_t data_len)
++{
++	return radius_msg_add_attr_internal(msg, type, data, data_len, false);
++}
++
++
++struct radius_attr_hdr * radius_msg_add_attr_raw(struct radius_msg *msg, u8 type,
++					       const u8 *data, size_t data_len)
++{
++	return radius_msg_add_attr_internal(msg, type, data, data_len, true);
+ }
+ 
+ 
+--- a/src/radius/radius.h
++++ b/src/radius/radius.h
+@@ -288,6 +288,9 @@
+ 			      int require_message_authenticator);
+ struct radius_attr_hdr * radius_msg_add_attr(struct radius_msg *msg, u16 type,
+ 					     const u8 *data, size_t data_len);
++/* Append one exact byte-type/value pair without extended-type interpretation. */
++struct radius_attr_hdr * radius_msg_add_attr_raw(struct radius_msg *msg, u8 type,
++					       const u8 *data, size_t data_len);
+ struct radius_msg * radius_msg_parse(const u8 *data, size_t len);
+ int radius_msg_add_eap(struct radius_msg *msg, const u8 *data,
+ 		       size_t data_len);
+--- a/wpa_supplicant/eapol_test.c
++++ b/wpa_supplicant/eapol_test.c
+@@ -86,19 +86,40 @@
+ 	unsigned int ctrl_iface:1;
+ 	unsigned int id_req_sent:1;
+ 	unsigned int secret_file_mode:1;
++	unsigned int attribute_file_mode:1;
++	unsigned int preparation_failed:1;
+ };
+ 
+ static struct eapol_test_data eapol_test;
+ 
+ #define EAPOL_TEST_SECRET_MAX 4096
++#define EAPOL_TEST_ATTR_FILE_MAX 32832
++#define EAPOL_TEST_ATTR_LINE_MAX 512
++#define EAPOL_TEST_ATTR_COUNT_MAX 64
+ static char *eapol_test_file_secret;
+-
+-
+-/* Clear both the file input and the RADIUS client's owned copy on normal exit. */
+-static void eapol_test_clear_secrets(void)
++static char *eapol_test_file_attrs;
++
++
++static void eapol_test_clear_extra_attrs(struct eapol_test_data *e)
++{
++	struct extra_radius_attr *attr;
++
++	while (e->extra_attrs) {
++		attr = e->extra_attrs;
++		e->extra_attrs = attr->next;
++		os_free(attr);
++	}
++	bin_clear_free(eapol_test_file_attrs, EAPOL_TEST_ATTR_FILE_MAX + 1);
++	eapol_test_file_attrs = NULL;
++}
++
++
++/* Clear owned protected inputs and the RADIUS client copy on ordinary exit. */
++static void eapol_test_clear_inputs(void)
+ {
+ 	struct hostapd_radius_server *as;
+ 
++	eapol_test_clear_extra_attrs(&eapol_test);
+ 	bin_clear_free(eapol_test_file_secret, EAPOL_TEST_SECRET_MAX + 1);
+ 	eapol_test_file_secret = NULL;
+ 	if (!eapol_test.radius_conf || !eapol_test.radius_conf->auth_server)
+@@ -111,7 +132,7 @@
+ 
+ 
+ /* Linux file input: exact bytes, no newline stripping, and no value in errors. */
+-static char * eapol_test_read_secret(const char *path)
++static char * eapol_test_read_file(const char *path, size_t min, size_t max)
+ {
+ 	struct stat st;
+ 	char *buf = NULL;
+@@ -126,13 +147,14 @@
+ 	    st.st_uid != geteuid() || st.st_nlink != 1 ||
+ 	    ((st.st_mode & 07777) != 0400 &&
+ 	     (st.st_mode & 07777) != 0600) ||
+-	    st.st_size < 1 || st.st_size > EAPOL_TEST_SECRET_MAX)
++	    st.st_size < 0 || (size_t) st.st_size < min ||
++	    (size_t) st.st_size > max)
+ 		goto fail;
+-	buf = os_zalloc(EAPOL_TEST_SECRET_MAX + 1);
++	buf = os_zalloc(max + 1);
+ 	if (!buf)
+ 		goto fail;
+-	while (len < EAPOL_TEST_SECRET_MAX + 1) {
+-		n = read(fd, buf + len, EAPOL_TEST_SECRET_MAX + 1 - len);
++	while (len < max + 1) {
++		n = read(fd, buf + len, max + 1 - len);
+ 		if (n < 0 && errno == EINTR)
+ 			continue;
+ 		if (n < 0)
+@@ -141,7 +163,7 @@
+ 			break;
+ 		len += n;
+ 	}
+-	if (len < 1 || len > EAPOL_TEST_SECRET_MAX ||
++	if (len < min || len > max ||
+ 	    (off_t) len != st.st_size || memchr(buf, '\0', len))
+ 		goto fail;
+ 	close(fd);
+@@ -149,9 +171,92 @@
+ 
+ fail:
+ 	close(fd);
+-	bin_clear_free(buf, EAPOL_TEST_SECRET_MAX + 1);
++	bin_clear_free(buf, max + 1);
+ 	return NULL;
+ }
++
++
++static int eapol_test_add_extra_spec(struct eapol_test_data *e,
++                                   struct extra_radius_attr **tail, char *spec)
++{
++	struct extra_radius_attr *attr;
++	char *pos;
++
++	attr = os_zalloc(sizeof(*attr));
++	if (!attr)
++		return -1;
++	if (!*tail)
++		e->extra_attrs = attr;
++	else
++		(*tail)->next = attr;
++	*tail = attr;
++
++	attr->type = atoi(spec);
++	pos = os_strchr(spec, ':');
++	if (!pos) {
++		attr->syntax = 'n';
++		return 0;
++	}
++	pos++;
++	if (pos[0] == '\0' || pos[1] != ':') {
++		printf("Incorrect format of attribute specification\n");
++		return -1;
++	}
++	attr->syntax = pos[0];
++	attr->data = pos + 2;
++	return 0;
++}
++
++
++static int eapol_test_read_extra_attrs(struct eapol_test_data *e,
++                                     struct extra_radius_attr **tail,
++                                     const char *path)
++{
++	char *line, *end, *pos;
++	size_t rows = 0, len, digits, i;
++	unsigned int type;
++
++	eapol_test_file_attrs = eapol_test_read_file(
++		path, 0, EAPOL_TEST_ATTR_FILE_MAX);
++	if (!eapol_test_file_attrs)
++		return -1;
++	line = eapol_test_file_attrs;
++	while (*line) {
++		end = os_strchr(line, '\n');
++		len = end ? (size_t) (end - line) : os_strlen(line);
++		if (++rows > EAPOL_TEST_ATTR_COUNT_MAX ||
++		    len > EAPOL_TEST_ATTR_LINE_MAX)
++			return -1;
++		if (end)
++			*end = '\0';
++		pos = line;
++		type = 0;
++		digits = 0;
++		while (*pos >= '0' && *pos <= '9') {
++			if (++digits > 3)
++				return -1;
++			type = type * 10 + *pos++ - '0';
++		}
++		if (!digits || type < 1 || type > 255 ||
++		    os_strncmp(pos, ":x:", 3) != 0)
++			return -1;
++		pos += 3;
++		len = os_strlen(pos);
++		if ((len & 1) || len > 2 * RADIUS_MAX_ATTR_LEN)
++			return -1;
++		for (i = 0; i < len; i++) {
++			if (hex2num(pos[i]) < 0)
++				return -1;
++		}
++		if (eapol_test_add_extra_spec(e, tail, line) < 0)
++			return -1;
++		if (!end)
++			break;
++		line = end + 1;
++	}
++	return 0;
++}
++
+ 
+ 
+ static void send_eap_request_identity(void *eloop_ctx, void *timeout_ctx);
+@@ -169,11 +274,12 @@
+ 
+ 
+ static int add_extra_attr(struct radius_msg *msg,
+-			  struct extra_radius_attr *attr)
++			  struct extra_radius_attr *attr, bool raw)
+ {
+ 	size_t len;
+ 	char *pos;
+ 	u32 val;
++	int ret = -1;
+ 	char buf[RADIUS_MAX_ATTR_LEN + 1];
+ 
+ 	switch (attr->syntax) {
+@@ -192,12 +298,12 @@
+ 		len = os_strlen(pos);
+ 		if ((len & 1) || (len / 2) > RADIUS_MAX_ATTR_LEN) {
+ 			printf("Invalid extra attribute hexstring\n");
+-			return -1;
++			goto out;
+ 		}
+ 		len /= 2;
+ 		if (hexstr2bin(pos, (u8 *) buf, len) < 0) {
+ 			printf("Invalid extra attribute hexstring\n");
+-			return -1;
++			goto out;
+ 		}
+ 		break;
+ 	case 'd':
+@@ -207,24 +313,28 @@
+ 		break;
+ 	default:
+ 		printf("Incorrect extra attribute syntax specification\n");
+-		return -1;
+-	}
+-
+-	if (!radius_msg_add_attr(msg, attr->type, (u8 *) buf, len)) {
++		goto out;
++	}
++
++	if (!(raw ? radius_msg_add_attr_raw(msg, attr->type, (u8 *) buf, len) :
++	      radius_msg_add_attr(msg, attr->type, (u8 *) buf, len))) {
+ 		printf("Could not add attribute %d\n", attr->type);
+-		return -1;
+-	}
+-
+-	return 0;
++		goto out;
++	}
++
++	ret = 0;
++out:
++	forced_memzero(buf, sizeof(buf));
++	return ret;
+ }
+ 
+ 
+ static int add_extra_attrs(struct radius_msg *msg,
+-			   struct extra_radius_attr *attrs)
++			   struct extra_radius_attr *attrs, bool raw)
+ {
+ 	struct extra_radius_attr *p;
+ 	for (p = attrs; p; p = p->next) {
+-		if (add_extra_attr(msg, p) < 0)
++		if (add_extra_attr(msg, p, raw) < 0)
+ 			return -1;
+ 	}
+ 	return 0;
+@@ -259,6 +369,8 @@
+ 			     e->radius_identifier);
+ 	if (msg == NULL) {
+ 		printf("Could not create net RADIUS packet\n");
++		if (e->attribute_file_mode)
++			goto fail;
+ 		return;
+ 	}
+ 
+@@ -345,7 +457,7 @@
+ 		goto fail;
+ 	}
+ 
+-	if (add_extra_attrs(msg, e->extra_attrs) < 0)
++	if (add_extra_attrs(msg, e->extra_attrs, e->attribute_file_mode) < 0)
+ 		goto fail;
+ 
+ 	if (eap && !radius_msg_add_eap(msg, eap, len)) {
+@@ -371,6 +483,12 @@
+ 		}
+ 	}
+ 
++	if (e->attribute_file_mode &&
++	    wpabuf_len(radius_msg_get_buf(msg)) > 65507) {
++		printf("Protected RADIUS request exceeds UDP packet budget\n");
++		goto fail;
++	}
++
+ 	if (radius_client_send(e->radius, msg, RADIUS_AUTH, e->wpa_s->own_addr)
+ 	    < 0)
+ 		goto fail;
+@@ -378,6 +496,11 @@
+ 
+  fail:
+ 	radius_msg_free(msg);
++	if (e->attribute_file_mode) {
++		e->preparation_failed = 1;
++		printf("Protected RADIUS request preparation failed\n");
++		eloop_terminate();
++	}
+ }
+ 
+ 
+@@ -737,8 +860,6 @@
+ static void test_eapol_clean(struct eapol_test_data *e,
+ 			     struct wpa_supplicant *wpa_s)
+ {
+-	struct extra_radius_attr *p, *prev;
+-
+ 	wpa_sm_deinit(wpa_s->wpa);
+ 	wpa_s->wpa = NULL;
+ 	radius_client_deinit(e->radius);
+@@ -769,12 +890,7 @@
+ 
+ 	wpa_config_free(wpa_s->conf);
+ 
+-	p = e->extra_attrs;
+-	while (p) {
+-		prev = p;
+-		p = p->next;
+-		os_free(prev);
+-	}
++	eapol_test_clear_extra_attrs(e);
+ }
+ 
+ 
+@@ -1384,6 +1500,8 @@
+ 	       "                default 1812 for RADIUS/UDP and 2083 for RADIUS/TLS\n"
+ 	       "  -s<AS secret> = shared secret with the authentication server,\n"
+ 	       "                  default 'radius' for RADIUS/UDP and 'radsec' for RADIUS/TLS\n"
++	       "  -G<attribute file> = protected TYPE:x:HEX rows (requires -F; no -N),\n"
++	       "                        at most 64 rows of 0..253 exact value bytes\n"
+ 	       "  -F<secret file> = read shared secret from an owner-only regular file,\n"
+ 	       "                     1..4096 exact bytes, without NUL; no key dumps\n"
+ 	       "  -X<RADIUS protocol> = RADIUS protocol to use: UDP (default) or TLS\n"
+@@ -1426,21 +1544,21 @@
+ 	char *as_addr = "127.0.0.1";
+ 	int as_port = -1;
+ 	char *as_secret = NULL;
+-	const char *as_secret_file = NULL;
++	const char *as_secret_file = NULL, *attrs_file = NULL;
++	int extra_attr_arg = 0;
+ 	char *ca_cert = NULL, *client_cert = NULL;
+ 	char *private_key = NULL, *private_key_passwd = NULL;
+ 	bool tls = false;
+ 	char *cli_addr = NULL;
+ 	char *conf = NULL;
+ 	int timeout = 30;
+-	char *pos;
+-	struct extra_radius_attr *p = NULL, *p1;
++	struct extra_radius_attr *p = NULL;
+ 	const char *ifname = "test";
+ 	const char *ctrl_iface = NULL;
+ 
+ 	if (os_program_init())
+ 		return -1;
+-	if (atexit(eapol_test_clear_secrets))
++	if (atexit(eapol_test_clear_inputs))
+ 		return -1;
+ 
+ 	hostapd_logger_register_cb(hostapd_logger_cb);
+@@ -1455,7 +1573,7 @@
+ 
+ 	for (;;) {
+ 		c = getopt(argc, argv,
+-			   "a:A:c:C:eF:i:j:J:k:K:M:nN:o:p:P:r:R:s:St:T:vWX:");
++			   "a:A:c:C:eF:G:i:j:J:k:K:M:nN:o:p:P:r:R:s:St:T:vWX:");
+ 		if (c < 0)
+ 			break;
+ 		switch (c) {
+@@ -1481,6 +1599,14 @@
+ 			}
+ 			as_secret_file = optarg;
+ 			eapol_test.secret_file_mode = 1;
++			break;
++		case 'G':
++			if (attrs_file) {
++				printf("Invalid attribute-file options\n");
++				return -1;
++			}
++			attrs_file = optarg;
++			eapol_test.attribute_file_mode = 1;
+ 			break;
+ 		case 'i':
+ 			ifname = optarg;
+@@ -1560,32 +1686,9 @@
+ 			}
+ 			break;
+ 		case 'N':
+-			p1 = os_zalloc(sizeof(*p1));
+-			if (p1 == NULL)
+-				break;
+-			if (!p)
+-				eapol_test.extra_attrs = p1;
+-			else
+-				p->next = p1;
+-			p = p1;
+-
+-			p->type = atoi(optarg);
+-			pos = os_strchr(optarg, ':');
+-			if (pos == NULL) {
+-				p->syntax = 'n';
+-				p->data = NULL;
+-				break;
+-			}
+-
+-			pos++;
+-			if (pos[0] == '\0' || pos[1] != ':') {
+-				printf("Incorrect format of attribute "
+-				       "specification\n");
+-				break;
+-			}
+-
+-			p->syntax = pos[0];
+-			p->data = pos + 2;
++			extra_attr_arg = 1;
++			/* Preserve legacy parse/error behavior outside file input. */
++			eapol_test_add_extra_spec(&eapol_test, &p, optarg);
+ 			break;
+ 		default:
+ 			usage();
+@@ -1593,6 +1696,10 @@
+ 		}
+ 	}
+ 
++	if (attrs_file && (!as_secret_file || extra_attr_arg)) {
++			printf("Invalid attribute-file options\n");
++			return -1;
++	}
+ 	if (as_secret_file) {
+ 		if (as_secret) {
+ 			printf("Invalid secret-file options\n");
+@@ -1601,6 +1708,11 @@
+ 		/* Unattended file-input mode does not enable key or packet dumps. */
+ 		wpa_debug_level = MSG_INFO;
+ 		wpa_debug_show_keys = 0;
++	}
++	if (attrs_file &&
++	    eapol_test_read_extra_attrs(&eapol_test, &p, attrs_file) < 0) {
++		printf("Invalid protected attribute file\n");
++		return -1;
+ 	}
+ 	if (!as_secret)
+ 		as_secret = tls ? "radsec" : "radius";
+@@ -1657,7 +1769,8 @@
+ 	}
+ 
+ 	if (as_secret_file) {
+-		eapol_test_file_secret = eapol_test_read_secret(as_secret_file);
++		eapol_test_file_secret = eapol_test_read_file(
++			as_secret_file, 1, EAPOL_TEST_SECRET_MAX);
+ 		if (!eapol_test_file_secret) {
+ 			printf("Invalid protected secret file\n");
+ 			return -1;
+@@ -1735,6 +1848,8 @@
+ 	       eapol_test.num_mppe_ok, eapol_test.num_mppe_mismatch);
+ 	if (eapol_test.num_mppe_mismatch)
+ 		ret = -4;
++	if (eapol_test.preparation_failed)
++		ret = -1;
+ 	if (eapol_test.secret_file_mode)
+ 		printf("EAPOL_TEST_RESULT accept=%d reject=%d timeout=%d "
+ 		       "mppe_ok=%d mppe_mismatch=%d cert_error=%u\n",
