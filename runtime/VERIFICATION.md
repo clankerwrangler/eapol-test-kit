@@ -39,7 +39,9 @@ same original password still worked in the same named volume. The exact
 temporary test resources were removed.
 
 The test published only on a loopback alias to exercise automatic host
-acceptance; it does not establish real-LAN reachability or HTTPS delivery.
+acceptance. README LAN steps use that host-acceptance behavior; they do
+not mean a second LAN computer was tested. This check does not establish
+real-LAN reachability or HTTPS delivery.
 All 34 installed input hashes, including both kit notice documents, and
 all 17 locked dependency versions matched the frozen source. The local
 image SHA-256 is

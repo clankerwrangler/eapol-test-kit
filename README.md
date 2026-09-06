@@ -10,36 +10,6 @@ Version 0.1.0 has passed end-to-end authentication tests against an external Fre
 
 Install Docker Engine and the Docker Compose plugin on your Debian host. The default publication is localhost only. The workbench password is separate from RADIUS credentials. Do not publish this credential-handling tool directly to the internet.
 
-### Trusted-LAN HTTP access from a CLI-only Debian host
-
-This is an opt-in plaintext deployment, not an HTTPS connection. HTTP does not encrypt the workbench password, session cookies, RADIUS credentials, or uploaded and downloaded private material in transit. Other systems on the network path can read or modify that traffic. Storage encryption does not protect network traffic. Use this option only on a trusted LAN. Use an SSH tunnel or HTTPS if you need transport encryption.
-
-Initial deployment needs only a terminal on the Debian host. You use a browser on another LAN computer afterward; no Debian desktop, Debian browser, or persistent SSH tunnel is required.
-
-1. In this directory, create or edit the `.env` file. Set the Debian host's LAN IPv4 address, replacing `YOUR_DEBIAN_LAN_IPV4` with that address:
-
-   ```dotenv
-   EAPOLKIT_BIND_ADDRESS=YOUR_DEBIAN_LAN_IPV4
-   ```
-
-   This one setting selects the published interface and adds that IP to the default accepted HTTP hosts. You do not need a second host setting. Keep `EAPOLKIT_SECURE_COOKIES` unset for HTTP. If you previously set `EAPOLKIT_ALLOWED_HOSTS`, remove that override to use the automatic defaults, or include the LAN IP in your explicit list.
-
-2. For a new installation, run this sequence in the Debian terminal:
-
-   ```sh
-   docker compose build &&
-   docker compose run --rm --no-deps kit python -m eapolkit.setup &&
-   docker compose up -d
-   ```
-
-   Enter a unique workbench password twice when prompted. Input is not echoed. The terminal accepts 1–4096 UTF-8 characters without truncating long lines. An overlength or invalid entry is rejected without using a prefix. Erase, line and word erase, EOF, signals, flow control, and literal-next quoting use the terminal’s configured controls. The setup command writes the password hash to the same private data volume that the web service uses. It does not start the web service or publish its ports. Do not add `--service-ports` or `--publish` to this command. The `&&` sequence starts the service only after setup succeeds.
-
-   If setup fails or is cancelled, do not start LAN publication until setup succeeds. Rerunning setup never replaces an existing password. If the workbench already has a password, skip initialization and run `docker compose up --build -d` instead; saved data and the password remain in the existing volume.
-
-3. On another LAN computer, open `http://YOUR_DEBIAN_LAN_IPV4:8080`, replacing the placeholder with the same Debian address. Sign in with the workbench password.
-
-The default port is 8080. Set `EAPOLKIT_PORT` in `.env` if you need another published port, and use that port in the browser URL. The kit does not configure host addresses, routing, or firewalls. The host must already be reachable from the client.
-
 ### Localhost access
 
 From this directory, run:
@@ -57,6 +27,38 @@ ssh -L 8080:127.0.0.1:8080 YOUR_SSH_USER@YOUR_DEBIAN_HOST
 ```
 
 Then open `http://127.0.0.1:8080` on your computer. Keep the SSH session open during use.
+
+### Opt-in trusted-LAN HTTP
+
+This option publishes plaintext HTTP on a concrete host address. It is for a CLI-only Debian host that already has a trusted-LAN IPv4 address another computer can reach. It is not an HTTPS connection, and it is not a claim that the kit made the host reachable.
+
+HTTP does not encrypt the workbench password, session cookies, RADIUS credentials, or uploaded and downloaded private material in transit. Other systems on the network path can read or modify that traffic. Storage encryption does not protect network traffic. Use this option only on a trusted LAN. Use an SSH tunnel or HTTPS if you need transport encryption.
+
+The kit binds the chosen address and accepts it as an HTTP host. It does not assign that address, open firewalls, or change routing. The checked Compose path used a loopback alias to verify that host acceptance. It did not use a second LAN computer.
+
+1. In this directory, create or edit the `.env` file. Set the Debian host's existing LAN IPv4 address, replacing `YOUR_DEBIAN_LAN_IPV4` with that address:
+
+   ```dotenv
+   EAPOLKIT_BIND_ADDRESS=YOUR_DEBIAN_LAN_IPV4
+   ```
+
+   This one setting selects the published interface and adds that IP to the default accepted HTTP hosts. You do not need a second host setting. Keep `EAPOLKIT_SECURE_COOKIES` unset for HTTP. If you previously set `EAPOLKIT_ALLOWED_HOSTS`, remove that override to use the automatic defaults, or include the LAN IP in your explicit list.
+
+2. For a new installation, run this sequence in the Debian terminal:
+
+   ```sh
+   docker compose build &&
+   docker compose run --rm --no-deps kit python -m eapolkit.setup &&
+   docker compose up -d
+   ```
+
+   Enter a unique workbench password twice when prompted. Input is not echoed. The terminal accepts 1–4096 UTF-8 characters without truncating long lines. An overlength or invalid entry is rejected without using a prefix. Erase, line and word erase, EOF, signals, flow control, and literal-next quoting use the terminal’s configured controls. The setup command writes the password hash to the same private data volume that the web service uses. It does not start the web service or publish its ports. Do not add `--service-ports` or `--publish` to this command. The `&&` sequence starts the service only after setup succeeds.
+
+   If setup fails or is cancelled, do not start this publication until setup succeeds. Rerunning setup never replaces an existing password. If the workbench already has a password, skip initialization and run `docker compose up --build -d` instead; saved data and the password remain in the existing volume.
+
+3. If another computer on the trusted LAN can already reach that address, open `http://YOUR_DEBIAN_LAN_IPV4:8080`, replacing the placeholder with the same Debian address. Sign in with the workbench password. No Debian desktop, Debian browser, or persistent SSH tunnel is required once that path exists.
+
+The default port is 8080. Set `EAPOLKIT_PORT` in `.env` if you need another published port, and use that port in the browser URL.
 
 ### HTTPS reverse proxy
 
@@ -131,7 +133,7 @@ Run reports are diagnostic exports, not backups. Preserve the complete applicati
 
 ### CLI-only deployment update
 
-The terminal reader and affected setup, API, and storage behavior passed 47 focused tests on 2026-09-06, including 24 real-PTY cases covering complete 4096-character UTF-8 input, delayed-suffix rejection without echo, and terminal restoration. The earlier CLI/backend checkpoint passed 243 tests; 11 optional UI tests were skipped. See `runtime/VERIFICATION.md` for the Docker Compose checkpoint and deployment limits. The native client is unchanged; the RADIUS and full browser matrices were not repeated for this deployment update.
+The terminal reader and affected setup, API, and storage behavior passed 47 focused tests on 2026-09-06, including 24 real-PTY cases covering complete 4096-character UTF-8 input, delayed-suffix rejection without echo, and terminal restoration. The earlier CLI/backend checkpoint passed 243 tests; 11 optional UI tests were skipped. The Docker Compose check published on a loopback alias to exercise automatic host acceptance; it does not establish that a second LAN computer can reach the host, and it does not test HTTPS. See `runtime/VERIFICATION.md` for that checkpoint and the other deployment limits. The native client is unchanged; the RADIUS and full browser matrices were not repeated for this deployment update.
 
 ### Original authentication validation
 
