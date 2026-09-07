@@ -2,6 +2,8 @@
 
 A web UI for testing RADIUS/EAP authentication with `eapol_test`.
 
+![EAPOL Test Kit workbench with a completed PEAP run](docs/images/workbench.png)
+
 Save RADIUS targets and EAP profiles, import or generate certificates, and inspect
 authentication results. Includes presets for EAP-TLS, PEAP-MSCHAPv2, TTLS-PAP, and
 TTLS-MSCHAPv2.
