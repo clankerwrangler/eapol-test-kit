@@ -166,7 +166,7 @@ credentials, certificates, and run history.**
 
 ## Development
 
-See the [implementation contract](docs/implementation-contract.md) for API and
+See the [technical specification](docs/technical-specification.md) for API and
 behavior details, and [runtime verification](runtime/VERIFICATION.md) for the
 tested environment and image verification details.
 
