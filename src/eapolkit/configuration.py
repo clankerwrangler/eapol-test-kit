@@ -24,8 +24,8 @@ def _asset(certificates, object_id, kinds):
 
 def validate_runnable(profile, target, certificates, store):
     # Revalidate stored editable input before it can reach a process argument or configuration.
-    ProfileInput.model_validate({key: value for key, value in profile.items() if key not in {"id", "has_password"} and not key.startswith("_")})
-    TargetInput.model_validate({key: value for key, value in target.items() if key not in {"id", "has_secret", "extra_attributes"} and not key.startswith("_")})
+    ProfileInput.model_validate({key: value for key, value in profile.items() if key not in {"id", "has_password", "extra_attributes", "expected_outcome"} and not key.startswith("_")})
+    TargetInput.model_validate({key: value for key, value in target.items() if key not in {"id", "has_secret", "extra_attributes", "calling_station_id"} and not key.startswith("_")})
     if not profile.get("identity"):
         raise ValueError("Set a nonempty EAP identity before running")
     if not profile.get("server_name") or not profile.get("ca_certificate_id"):
@@ -97,9 +97,10 @@ def preview(profile, certificates):
     return {"configuration": render(profile, paths, redacted=True), "warnings": warnings}
 
 
-def radius_attribute_file(target, rows):
+def radius_attribute_file(target, rows, profile=None):
     """Encode all attributes for the protected native -G input, never argv."""
-    attributes = [(32, target.get("nas_identifier", "eapol-test-kit").encode("utf-8")), (31, target.get("calling_station_id", "02:00:00:00:00:01").encode("utf-8"))]
+    station = (profile or {}).get("calling_station_id") or "02:00:00:00:00:01"
+    attributes = [(32, target.get("nas_identifier", "eapol-test-kit").encode("utf-8")), (31, station.encode("utf-8"))]
     if target.get("nas_ip_address"):
         attributes.append((4, ipaddress.IPv4Address(target["nas_ip_address"]).packed))
     attributes.extend((row["id"], encode_value(row)) for row in rows)

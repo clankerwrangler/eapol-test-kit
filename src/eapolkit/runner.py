@@ -18,7 +18,7 @@ import sys
 import time
 
 from .configuration import preview, radius_attribute_file, render, validate_runnable
-from .attributes import decoded_rows, encode_value, public_target
+from .attributes import decoded_rows, encode_value, public_profile, public_target
 from .storage import public
 from .redaction import Redactor
 
@@ -120,7 +120,7 @@ class RunManager:
                     shutil.rmtree(entry)
         for record in self.store.list("run"):
             if record.get("status") in {"queued", "running"}:
-                record.update(status="interrupted", outcome="interrupted", verdict="inconclusive", summary="The service restarted before this run finished. Authentication was not replayed.", finished_at=_stamp(), duration_seconds=None)
+                record.update(status="interrupted", outcome="interrupted", summary="The service restarted before this run finished. Authentication was not replayed.", finished_at=_stamp(), duration_seconds=None)
                 self.store.put("run", record)
         self._prune()
 
@@ -152,7 +152,7 @@ class RunManager:
             raise RunConflict("An active run cannot be deleted")
         self.store.delete("run", object_id)
 
-    async def start(self, target_id, profile_id, expected_outcome=None):
+    async def start(self, target_id, profile_id):
         async with self._lock:
             if self._active_run_id is not None:
                 raise RunConflict("Another run is already active")
@@ -161,12 +161,9 @@ class RunManager:
             start_clock = time.monotonic()
             deadline = start_clock + target["timeout_seconds"]
             validate_runnable(profile, target, self.certificates, self.store)
-            rows = decoded_rows(self.store, target.get("extra_attributes", []))
-            attribute_content = radius_attribute_file(target, rows)
+            rows = decoded_rows(self.store, profile.get("extra_attributes", []))
+            attribute_content = radius_attribute_file(target, rows, profile)
             attribute_secrets = [value for row in rows if row["sensitivity"] == "private" for value in (row["value"], encode_value(row))]
-            expected = expected_outcome or profile["expected_outcome"]
-            if expected not in {"accept", "reject", "certificate_error"}:
-                raise ValueError("Unsupported expected outcome")
             binary = shutil.which(self.settings.binary)
             if binary is None:
                 raise ValueError("The patched eapol_test executable is not available")
@@ -178,10 +175,10 @@ class RunManager:
             record = {
                 "id": run_id, "target_id": target_id, "profile_id": profile_id,
                 "target_name": redactor.text(target["name"]), "profile_name": redactor.text(profile["name"]),
-                "expected_outcome": expected, "status": "queued", "outcome": None, "verdict": None, "summary": "Run queued.",
+                "status": "queued", "outcome": None, "summary": "Run queued.",
                 "created_at": _stamp(), "started_at": None, "finished_at": None, "duration_seconds": None, "exit_code": None,
                 "radius_response": None, "peer_success": None, "mppe_keys_match": None, "returned_attributes": [],
-                "snapshot": redactor.object({"target": public_target(self.store, target), "profile": public(profile), "configuration": preview(profile, self.certificates)["configuration"]}),
+                "snapshot": redactor.object({"target": public_target(self.store, target), "profile": public_profile(self.store, profile), "configuration": preview(profile, self.certificates)["configuration"]}),
                 "log_lines": [], "next_seq": 0, "truncated": False,
             }
             self.store.put("run", record)
@@ -364,7 +361,7 @@ class RunManager:
                         shutil.rmtree(directory)
                 except OSError:
                     outcome, summary = "error", "Owned run-file cleanup failed. Private files remain protected; cleanup must be checked."
-                record.update(status="cancelled" if outcome == "cancelled" else "interrupted" if outcome == "interrupted" else "completed", outcome=outcome, verdict=verdict(record["expected_outcome"], outcome), summary=summary, finished_at=_stamp(), duration_seconds=round(time.monotonic() - start_clock, 3))
+                record.update(status="cancelled" if outcome == "cancelled" else "interrupted" if outcome == "interrupted" else "completed", outcome=outcome, summary=summary, finished_at=_stamp(), duration_seconds=round(time.monotonic() - start_clock, 3))
                 self.store.put("run", record)
                 self._active_run_id = None
                 self._prune()

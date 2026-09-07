@@ -80,11 +80,11 @@ def test_persistence_write_only_secrets_and_duplicate(api):
     profile = client.post("/api/profiles", json={"name": "Recipe", "method": "ttls-pap", "identity": "test-user", "password": password}).json()
     require(profile["has_password"] is True)
     require(profile["ca_certificate_id"] is None)
-    duplicate = client.post(f"/api/profiles/{profile['id']}/duplicate", json={"name": "Expected rejection", "expected_outcome": "reject"})
+    duplicate = client.post(f"/api/profiles/{profile['id']}/duplicate", json={"name": "Copied recipe"})
     require(duplicate.status_code == 200)
     copied = duplicate.json()
     require(copied["id"] != profile["id"])
-    require(copied["expected_outcome"] == "reject")
+    require(copied["name"] == "Copied recipe")
     require(copied["has_password"] is True)
     same_ciphertext = app.state.store.get("profile", copied["id"])["_password"] == app.state.store.get("profile", profile["id"])["_password"]
     require(same_ciphertext)
@@ -110,7 +110,7 @@ def test_validation_never_echoes_credentials(api):
         response = client.post("/api/targets", json={"name": "Lab", "host": host})
         require(response.status_code == 422)
     for attribute in ({"id": 1, "type": "hex", "value": "0x00"}, {"id": 1, "type": "integer", "value": "4294967296"}, {"id": 4, "type": "ipaddr", "value": "::1"}):
-        require(client.post("/api/targets", json={"name": "Lab", "host": "127.0.0.1", "extra_attributes": [attribute]}).status_code == 422)
+        require(client.post("/api/profiles", json={"name": "Lab", "method": "ttls-pap", "extra_attributes": [attribute]}).status_code == 422)
     require(client.post("/api/profiles", json={"name": "Bad range", "method": "eap-tls", "tls_min_version": "1.3", "tls_max_version": "1.2"}).status_code == 422)
 
 

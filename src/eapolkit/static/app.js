@@ -191,10 +191,9 @@
     $("boot").hidden = true;
     $("auth-view").hidden = false;
     const setup = session.setup_required;
-    $("auth-title").textContent = setup ? "Make this workspace yours" : "Welcome back";
-    $("auth-description").textContent = setup ? "Set a workbench password before adding credentials or running tests. This is separate from your RADIUS or EAP passwords." : "Enter your workbench password to continue.";
-    $("auth-eyebrow").textContent = setup ? "FIRST-RUN SETUP" : "PROTECTED WORKSPACE";
-    $("auth-submit").textContent = setup ? "Set password & open workspace" : "Log in";
+    $("auth-title").textContent = setup ? "Set password" : "Log in";
+    $("auth-description").textContent = setup ? "Create the workbench password." : "Enter the workbench password.";
+    $("auth-submit").textContent = setup ? "Save password" : "Log in";
     $("auth-confirm-field").hidden = !setup;
     $("auth-confirm").required = setup;
     $("auth-password").autocomplete = setup ? "new-password" : "current-password";
@@ -288,10 +287,10 @@
   function updateRunControls() {
     const target = state.targets.find((item) => item.id === $("run-target").value);
     const profile = state.profiles.find((item) => item.id === $("run-profile").value);
-    $("run-target-description").textContent = target ? `${target.host}:${target.port} · ${target.timeout_seconds} s timeout` : "Choose a saved target.";
-    $("run-profile-description").textContent = profile ? `${methodName(profile.method)} · expects ${pretty(profile.expected_outcome)}${profile.identity ? ` · ${profile.identity}` : " · identity not set"}` : "Choose a saved profile.";
+    $("run-target-description").textContent = target ? `${target.host}:${target.port}` : "";
+    $("run-profile-description").textContent = profile ? `${methodName(profile.method)}${profile.identity ? ` · ${profile.identity}` : ""}` : "";
     $("start-run").disabled = !target || !profile || Boolean(state.activeRunId) || !state.status?.eapol_test_available || Boolean($("run-form").dataset.busy);
-    if (!$("run-form").dataset.busy) $("start-run").replaceChildren(icon("play"), document.createTextNode(state.activeRunId ? "A run is already active" : "Start authentication"));
+    if (!$("run-form").dataset.busy) $("start-run").replaceChildren(icon("play"), document.createTextNode(state.activeRunId ? "A run is already active" : "Start"));
     $("workbench-preview").disabled = !profile;
     $("show-active").hidden = !state.activeRunId || state.activeRunId === state.viewedRunId;
     $("service-status").textContent = state.activeRunId ? "Run in progress" : state.status?.eapol_test_available ? "Runner ready" : "Runner unavailable";
@@ -306,7 +305,7 @@
       card.append(node("h3", target.name), node("p", `${target.host}:${target.port}`, "card-description"));
       const meta = node("div", undefined, "card-meta");
       meta.append(pill(`${target.timeout_seconds} s timeout`), pill(target.has_secret ? "Secret saved" : "Secret missing"));
-      card.append(meta, node("p", `NAS: ${text(target.nas_identifier)} · Calling station: ${text(target.calling_station_id)}`, "card-description"));
+      card.append(meta, node("p", text(target.nas_identifier), "card-description"));
       const actions = node("div", undefined, "card-actions");
       actions.append(button("Edit", () => editTarget(target)), button("Delete", () => confirmDelete("target", target, async () => {
         await api(path("targets", target.id), {method: "DELETE"}); await loadWorkspace();
@@ -318,11 +317,9 @@
     const form = $("target-form"); form.reset();
     state.editTargetId = target?.id || null;
     $("target-dialog-title").textContent = target ? "Edit target" : "Add target";
-    if (target) ["name", "host", "port", "timeout_seconds", "nas_identifier", "nas_ip_address", "calling_station_id"].forEach((key) => { form.elements.namedItem(key).value = target[key] ?? ""; });
+    if (target) ["name", "host", "port", "timeout_seconds", "nas_identifier", "nas_ip_address"].forEach((key) => { form.elements.namedItem(key).value = target[key] ?? ""; });
     $("target-secret").required = !target?.has_secret;
-    $("target-secret-hint").textContent = target?.has_secret ? "A secret is saved. Leave blank to preserve it; enter a value to replace it. Cleared after every submission." : "A shared secret is required. The input is cleared after every submission.";
-    $("attribute-list").replaceChildren();
-    (target?.extra_attributes || []).forEach(addAttribute);
+    $("target-secret-hint").textContent = target?.has_secret ? "Leave blank to keep the saved secret." : "Required.";
     form.querySelector("details").open = false;
     openDialog("target-dialog");
   }
@@ -401,7 +398,7 @@
   bindButton("add-attribute", () => addAttribute());
   bindForm("target-form", async () => {
     const form = $("target-form"); const value = (name) => form.elements.namedItem(name).value;
-    const payload = {name: value("name"), host: value("host"), port: Number(value("port")), timeout_seconds: Number(value("timeout_seconds")), nas_identifier: value("nas_identifier"), nas_ip_address: value("nas_ip_address") || null, calling_station_id: value("calling_station_id"), extra_attributes: [...$("attribute-list").children].map(attributePayload)};
+    const payload = {name: value("name"), host: value("host"), port: Number(value("port")), timeout_seconds: Number(value("timeout_seconds")), nas_identifier: value("nas_identifier"), nas_ip_address: value("nas_ip_address") || null};
     if (value("secret") !== "") payload.secret = value("secret");
     clearSecrets(form);
     await api(state.editTargetId ? path("targets", state.editTargetId) : "/api/targets", {method: state.editTargetId ? "PUT" : "POST", body: payload});
@@ -411,7 +408,7 @@
     const presets = $("preset-list"); presets.replaceChildren();
     state.presets.forEach((preset, index) => {
       const item = node("button", undefined, "preset-card"); item.type = "button";
-      item.append(node("span", `PRESET 0${index + 1}`, "preset-number"), node("h3", methodName(preset.method)), node("p", methods[preset.method]?.[1] || "Editable EAP profile."), node("span", "Use preset", "preset-action"));
+      item.append(node("h3", methodName(preset.method)), node("span", "Use", "preset-action"));
       item.querySelector(".preset-action").append(icon("arrow"));
       item.addEventListener("click", () => editProfile(preset, true)); presets.append(item);
     });
@@ -420,7 +417,7 @@
     state.profiles.forEach((profile) => {
       const card = node("article", undefined, "item-card");
       card.append(node("h3", profile.name), node("p", text(profile.identity, "Identity not set"), "card-description"));
-      const meta = node("div", undefined, "card-meta"); meta.append(pill(methodName(profile.method)), pill(`Expects ${pretty(profile.expected_outcome)}`, profile.expected_outcome)); card.append(meta);
+      const meta = node("div", undefined, "card-meta"); meta.append(pill(methodName(profile.method))); card.append(meta);
       const missing = [];
       if (!profile.ca_certificate_id) missing.push("server CA");
       if (!profile.server_name) missing.push("server name");
@@ -428,7 +425,7 @@
       if (profile.method === "eap-tls" ? !profile.client_identity_id : !profile.has_password) missing.push(profile.method === "eap-tls" ? "client certificate" : "password");
       card.append(node("p", missing.length ? `Draft: add ${missing.join(", ")}.` : `Server name: ${profile.server_name}. Readiness is validated before execution.`, missing.length ? "card-warning" : "card-description"));
       const actions = node("div", undefined, "card-actions");
-      actions.append(button("Edit", () => editProfile(profile)), button("Preview", () => preview(profile.id)), button("Duplicate", () => duplicateProfile(profile, false)), button("Negative-test copy", () => duplicateProfile(profile, true)), button("Delete", () => confirmDelete("profile", profile, async () => {
+      actions.append(button("Edit", () => editProfile(profile)), button("Preview", () => preview(profile.id)), button("Duplicate", () => duplicateProfile(profile)), button("Delete", () => confirmDelete("profile", profile, async () => {
         await api(path("profiles", profile.id), {method: "DELETE"}); await loadWorkspace();
       }), "danger"));
       card.append(actions); list.append(card);
@@ -441,8 +438,10 @@
     const trust = state.certificates.filter((item) => ["trust", "ca"].includes(item.kind));
     options($("profile-ca"), trust.map((item) => ({id: item.id, label: `${item.name}${item.kind === "ca" ? " (kit CA — verify intended trust)" : ""}`})), "Select server trust (can add later)", profile?.ca_certificate_id);
     options($("profile-client"), state.certificates.filter((item) => item.kind === "identity").map((item) => ({id: item.id, label: item.name})), "Select client identity (can add later)", profile?.client_identity_id);
-    if (profile) ["name", "method", "identity", "anonymous_identity", "server_name", "tls_min_version", "tls_max_version", "fragment_size", "expected_outcome"].forEach((key) => { if (profile[key] !== undefined) form.elements.namedItem(key).value = profile[key] ?? ""; });
+    if (profile) ["name", "method", "identity", "anonymous_identity", "server_name", "tls_min_version", "tls_max_version", "fragment_size", "calling_station_id"].forEach((key) => { if (profile[key] !== undefined && form.elements.namedItem(key)) form.elements.namedItem(key).value = profile[key] ?? ""; });
     $("profile-expired").checked = Boolean(profile?.allow_expired_client_certificate);
+    $("attribute-list").replaceChildren();
+    (profile?.extra_attributes || []).forEach(addAttribute);
     $("profile-copy-note").hidden = !copied;
     $("profile-copy-note").textContent = "Copy saved. The server preserved its saved password without exposing it. Change only the fields you intend to test, then save.";
     $("profile-password-hint").textContent = profile?.has_password && !fromPreset ? "A password is saved. Leave blank to preserve it; enter a value to replace it. Cleared after every submission." : "Add a password before running this method. You can save a draft without one. Cleared after every submission.";
@@ -460,27 +459,25 @@
   bindForm("profile-form", async (event) => {
     const form = $("profile-form"); const value = (name) => form.elements.namedItem(name).value;
     const payload = {};
-    ["name", "method", "identity", "server_name", "tls_min_version", "tls_max_version", "expected_outcome"].forEach((key) => { payload[key] = value(key); });
+    ["name", "method", "identity", "server_name", "tls_min_version", "tls_max_version", "calling_station_id"].forEach((key) => { payload[key] = value(key); });
     ["anonymous_identity", "ca_certificate_id", "client_identity_id"].forEach((key) => { payload[key] = value(key) || null; });
     payload.fragment_size = Number(value("fragment_size"));
     payload.allow_expired_client_certificate = $("profile-expired").checked;
+    payload.extra_attributes = [...$("attribute-list").children].map(attributePayload);
     if (payload.method !== "eap-tls" && value("password") !== "") payload.password = value("password");
     clearSecrets(form);
     const saved = await api(state.editProfileId ? path("profiles", state.editProfileId) : "/api/profiles", {method: state.editProfileId ? "PUT" : "POST", body: payload});
     $("profile-dialog").close(); await loadWorkspace(); notify("Profile saved.");
     if (event.submitter?.value === "preview") await preview(saved.id);
   });
-  function duplicateProfile(profile, negative) {
+  function duplicateProfile(profile) {
     state.duplicateId = profile.id;
     $("duplicate-form").reset();
-    $("duplicate-title").textContent = negative ? "Create a negative-test copy" : "Duplicate profile";
-    const suffix = negative ? " — negative test" : " — copy";
-    $("duplicate-name").value = profile.name.slice(0, 120 - suffix.length) + suffix;
-    options($("duplicate-expectation"), Object.entries(outcomeNames).filter(([key]) => !negative || key !== "accept").map(([id, label]) => ({id, label})), "Choose an expectation", negative ? "" : profile.expected_outcome);
+    $("duplicate-name").value = profile.name.slice(0, 113) + " (copy)";
     openDialog("duplicate-dialog");
   }
   bindForm("duplicate-form", async () => {
-    const saved = await api(path("profiles", state.duplicateId, "/duplicate"), {method: "POST", body: {name: $("duplicate-name").value, expected_outcome: $("duplicate-expectation").value}});
+    const saved = await api(path("profiles", state.duplicateId, "/duplicate"), {method: "POST", body: {name: $("duplicate-name").value}});
     $("duplicate-dialog").close(); await loadWorkspace(); editProfile(saved, false, true);
   });
   async function preview(id) {
@@ -683,10 +680,9 @@
     $("run-empty").hidden = true; $("run-detail").hidden = false;
     const badges = $("run-badges"); badges.replaceChildren(pill(pretty(run.status), run.status));
     if (run.outcome) badges.append(pill(pretty(run.outcome), run.outcome));
-    if (run.verdict) badges.append(pill(`Verdict: ${pretty(run.verdict)}`, run.verdict));
     const summary = run.summary || (activeStates.has(run.status) ? "Authentication is in progress. Waiting for an observed result." : "No diagnostic summary was recorded.");
     if ($("run-summary").textContent !== summary) $("run-summary").textContent = summary;
-    const facts = [["Expected", pretty(run.expected_outcome)], ["Started", date(run.started_at)], ["Finished", date(run.finished_at)], ["Duration", run.duration_seconds == null ? "—" : `${Number(run.duration_seconds).toFixed(2)} s`], ["Exit code", run.exit_code], ["Run ID", run.id]];
+    const facts = [["Started", date(run.started_at)], ["Finished", date(run.finished_at)], ["Duration", run.duration_seconds == null ? "—" : `${Number(run.duration_seconds).toFixed(2)} s`], ["Exit code", run.exit_code]];
     if (run.radius_response !== undefined && run.radius_response !== null) facts.push(["RADIUS response", run.radius_response]);
     if (run.peer_success !== undefined && run.peer_success !== null) facts.push(["Peer / keying success", run.peer_success ? "Observed" : "Not observed"]);
     if (run.mppe_keys_match !== undefined && run.mppe_keys_match !== null) facts.push(["MPPE keys match", run.mppe_keys_match ? "Yes (key material is never displayed)" : "No"]);
@@ -710,7 +706,6 @@
   }
   bindForm("run-form", async () => {
     const payload = {target_id: $("run-target").value, profile_id: $("run-profile").value};
-    if ($("run-expectation").value) payload.expected_outcome = $("run-expectation").value;
     try {
       const run = await api("/api/runs", {method: "POST", body: payload});
       state.activeRunId = activeStates.has(run.status) ? run.id : null;
@@ -739,14 +734,12 @@
     const wrap = node("div", undefined, "table-wrap");
     const table = node("table"); const caption = node("caption", "Recent authentication runs", "skip-link"); table.append(caption);
     const head = node("thead"); const header = node("tr");
-    ["Run / started", "Observed", "Expected", "Verdict", "Actions"].forEach((label) => { const cell = node("th", label); cell.scope = "col"; header.append(cell); }); head.append(header); table.append(head);
+    ["Run", "Result", "Actions"].forEach((label) => { const cell = node("th", label); cell.scope = "col"; header.append(cell); }); head.append(header); table.append(head);
     const body = node("tbody");
     state.runs.forEach((run) => {
       const row = node("tr"); const description = node("td");
       description.append(node("strong", run.profile_name || run.profile_id || run.id), node("p", `${run.target_name || run.target_id || "Target"} · ${date(run.started_at || run.created_at)}`, "muted"));
       const observed = node("td"); observed.append(pill(pretty(run.outcome || run.status), run.outcome || run.status));
-      const expected = node("td", pretty(run.expected_outcome));
-      const verdict = node("td"); verdict.append(pill(pretty(run.verdict), run.verdict));
       const actions = node("td"); const buttons = node("div", undefined, "actions");
       buttons.append(button("View", () => viewRun(run.id)), button("JSON", () => download(path("runs", run.id, "/export"), "eapolkit-run-sanitized.json")));
       if (!activeStates.has(run.status)) buttons.append(button("Delete", () => confirmDelete("run", run, async () => {
@@ -754,7 +747,7 @@
         if (state.viewedRunId === run.id) resetRunView();
         await refreshHistory();
       }), "danger"));
-      actions.append(buttons); row.append(description, observed, expected, verdict, actions); body.append(row);
+      actions.append(buttons); row.append(description, observed, actions); body.append(row);
     });
     table.append(body); wrap.append(table); list.append(wrap);
   }

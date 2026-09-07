@@ -154,7 +154,7 @@ print('SUCCESS',flush=True)
         run_id = response.json()["id"]
         record = _wait(client, run_id)
         require(record["outcome"] == "accept")
-        require(record["verdict"] == "pass")
+        require(record["status"] == "completed")
         require(record["radius_response"] == "accept")
         require(record["peer_success"] is True)
         require(record["mppe_keys_match"] is True)
@@ -198,7 +198,7 @@ def test_one_active_run_live_polling_and_owned_cancellation(tmp_path):
         require(cancelled.status_code == 200)
         require(cancelled.json()["status"] == "cancelled")
         require(cancelled.json()["outcome"] == "cancelled")
-        require(cancelled.json()["verdict"] == "inconclusive")
+        require(cancelled.json()["status"] == "cancelled")
         require(cancelled.json()["exit_code"] is not None)
         details = json.loads(audit.read_text())
         require(not Path(details["run_directory"]).exists())
@@ -211,10 +211,10 @@ def test_overall_timeout_cleans_and_reaps_process(tmp_path):
     with TestClient(create_app(settings)) as client:
         target, profile, credentials = _setup(client)
         started = time.monotonic()
-        run_id = client.post("/api/runs", json={"target_id": target["id"], "profile_id": profile["id"], "expected_outcome": "reject"}).json()["id"]
+        run_id = client.post("/api/runs", json={"target_id": target["id"], "profile_id": profile["id"]}).json()["id"]
         record = _wait(client, run_id)
         require(record["outcome"] == "timeout")
-        require(record["verdict"] != "pass")
+        require(record["outcome"] == "timeout")
         require(time.monotonic() - started < 7)
         details = json.loads(audit.read_text())
         require(not Path(details["run_directory"]).exists())
@@ -240,7 +240,7 @@ def test_restart_recovery_does_not_replay_and_removes_stale_files(tmp_path):
     recovered = manager.get(run_id)
     require(recovered["status"] == "interrupted")
     require(recovered["outcome"] == "interrupted")
-    require(recovered["verdict"] == "inconclusive")
+    require(recovered["status"] == "interrupted")
     require(manager.active_run_id is None)
     require(not stale.exists())
     asyncio.run(manager.shutdown())
@@ -260,7 +260,7 @@ def test_radius_secret_exact_bytes_survive_api_to_private_file(tmp_path, maximum
         require(run.status_code == 200)
         record = _wait(client, run.json()["id"])
         require(record["outcome"] == "accept")
-        require(record["verdict"] == "pass")
+        require(record["status"] == "completed")
         require(record["exit_code"] == 0)
         if maximum:
             require(len(radius.encode("utf-8")) == 4096)
@@ -320,7 +320,7 @@ def test_private_and_public_attributes_reach_only_the_protected_file(tmp_path):
     settings, audit = _fixture(tmp_path, behavior, expected_attributes=expected)
     with TestClient(create_app(settings)) as client:
         target, profile, credentials = _setup(client)
-        changed = client.put(f"/api/targets/{target['id']}", json={"name": "Attribute wire", "host": "127.0.0.1", "extra_attributes": [{"id":26,"type":"hex","value":public_vsa,"sensitivity":"public"},{"id":241,"type":"hex","value":"01"+private_hex}]})
+        changed = client.put(f"/api/profiles/{profile['id']}", json={"name": profile["name"], "method": profile["method"], "identity": profile["identity"], "server_name": profile["server_name"], "ca_certificate_id": profile["ca_certificate_id"], "extra_attributes": [{"id":26,"type":"hex","value":public_vsa,"sensitivity":"public"},{"id":241,"type":"hex","value":"01"+private_hex}]})
         require(changed.status_code==200)
         rows = changed.json()["extra_attributes"]
         require(rows[0]["value"]==public_vsa)
@@ -329,7 +329,7 @@ def test_private_and_public_attributes_reach_only_the_protected_file(tmp_path):
         require(run.status_code==200)
         record = _wait(client,run.json()["id"])
         require(record["outcome"]=="accept" and record["exit_code"]==0)
-        require("value" not in record["snapshot"]["target"]["extra_attributes"][1])
+        require("value" not in record["snapshot"]["profile"]["extra_attributes"][1])
         dump=client.get(f"/api/runs/{record['id']}/export").content
         forms=[private.encode(),private_hex.encode(),("01"+private_hex).encode(),base64.b64encode(b"\x01"+private.encode())]
         clean=all(form not in dump and form not in (settings.data_dir/"eapolkit.sqlite3").read_bytes() for form in forms)

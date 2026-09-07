@@ -63,7 +63,7 @@ Without an override, accepted hosts are `localhost`, `127.0.0.1`, `::1`, and the
 5. Inspect the generated configuration preview.
 6. Select the target and profile, and then start the run.
 
-Saved targets and profiles are independent. Advanced fields cover anonymous identity, TLS versions, fragment size, NAS attributes, and expected outcomes. Omitting a password on a profile update keeps the saved value. Duplicating a profile copies the saved password on the server and does not return it to the browser.
+Saved targets and profiles are independent. A target is the RADIUS server (host, port, secret, NAS-Identifier, NAS-IP-Address, timeout). A profile is the EAP method, identity, certificates, Calling-Station-Id, and extra RADIUS attributes. Omitting a password on a profile update keeps the saved value. Duplicating a profile copies the saved password on the server.
 
 Custom RADIUS attributes support text, unsigned integers, hexadecimal bytes, and IPv4 addresses. Hexadecimal input is the attribute payload, not the outer type/length header. Generated and custom attributes are passed to the client through a protected file. Private values stay hidden after saving; making a private value public requires a replacement value and confirmation. Known credential-bearing attributes stay private.
 
@@ -90,14 +90,7 @@ Public certificate and CSR downloads omit the private key. Exporting a private i
 
 ## Results
 
-A run records the observed outcome separately from the selected expectation:
-
-- Success requires completed EAP processing.
-- Rejection requires rejection evidence.
-- A server certificate error requires certificate-validation evidence.
-- Timeout, launch error, cancellation, and interruption do not satisfy a rejection expectation.
-
-**Duplicate as a negative test** copies a working profile so you can change one condition. Returned authorization attributes, if shown, are the values the server sent. On a narrow screen, the history table scrolls horizontally.
+A run records the observed result: accept, reject, certificate error, timeout, cancellation, or interruption. Accept requires completed EAP processing. Returned authorization attributes, if shown, are the values the server sent.
 
 ## Data
 

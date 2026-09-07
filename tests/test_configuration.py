@@ -38,8 +38,9 @@ def test_explicit_tls_bounds_and_exact_radius_attribute_bytes():
     config = render(profile, {}, b"")
     require("tls_disable_tlsv1_2=1" in config)
     require("tls_disable_tlsv1_3=0" in config)
-    target = TargetInput(name="Test", host="::1", nas_identifier="Lab \u03bb", nas_ip_address="192.0.2.7", extra_attributes=[{"id": 27, "type": "integer", "value": "4294967295"}]).model_dump(exclude={"secret"})
-    content = radius_attribute_file(target, target["extra_attributes"]).decode("ascii")
+    target = TargetInput(name="Test", host="::1", nas_identifier="Lab \u03bb", nas_ip_address="192.0.2.7").model_dump(exclude={"secret"})
+    profile = ProfileInput(name="Test", method="ttls-pap", extra_attributes=[{"id": 27, "type": "integer", "value": "4294967295"}]).model_dump(exclude={"password"})
+    content = radius_attribute_file(target, profile["extra_attributes"], profile).decode("ascii")
     require("32:x:" + "Lab \u03bb".encode().hex() in content)
     require("4:x:c0000207" in content)
     require("27:x:ffffffff" in content)
@@ -48,6 +49,6 @@ def test_explicit_tls_bounds_and_exact_radius_attribute_bytes():
 
 @pytest.mark.parametrize("attribute_id", [2, 3, 24, 26, 60, 69, 79, 80, 103, 241])
 def test_credential_bearing_and_opaque_attributes_use_private_file_encoding(attribute_id):
-    target = TargetInput(name="Test", host="127.0.0.1", extra_attributes=[{"id": attribute_id, "type": "hex", "value": "00"}])
-    content = radius_attribute_file(target.model_dump(exclude={"secret"}), [row.model_dump(exclude_unset=True) for row in target.extra_attributes])
+    profile = ProfileInput(name="Test", method="ttls-pap", extra_attributes=[{"id": attribute_id, "type": "hex", "value": "00"}])
+    content = radius_attribute_file(TargetInput(name="Test", host="127.0.0.1").model_dump(exclude={"secret"}), [row.model_dump(exclude_unset=True) for row in profile.extra_attributes], profile.model_dump(exclude={"password"}))
     require(f"{attribute_id}:x:00\n".encode() in content)

@@ -123,7 +123,7 @@ def test_an_overlong_suppressed_line_invalidates_terminal_success(tmp_path):
         response = client.post("/api/runs", json={"target_id": target["id"], "profile_id": profile["id"]})
         _require(response.status_code == 200, "The synthetic run was not accepted")
         record = _wait(client, response.json()["id"])
-        _require(record["outcome"] != "accept" and record["verdict"] != "pass", "Suppressed trailing output preserved an earlier success assertion")
+        _require(record["outcome"] != "accept", "Suppressed trailing output preserved an earlier success assertion")
 
 
 def test_cancel_terminates_a_descendant_that_ignores_sigterm(tmp_path):
@@ -218,7 +218,7 @@ def test_dns_preparation_is_cancellable_and_uses_the_overall_deadline(tmp_path, 
 
         monkeypatch.setattr(manager, "_spawn", controlled_spawn)
         started = time.monotonic()
-        response = client.post("/api/runs", json={"target_id": target["id"], "profile_id": profile["id"], "expected_outcome": "reject"})
+        response = client.post("/api/runs", json={"target_id": target["id"], "profile_id": profile["id"]})
         _require(response.status_code == 200, "DNS fixture run was not accepted")
         run_id = response.json()["id"]
         _wait_file(resolver_ready)
@@ -230,7 +230,7 @@ def test_dns_preparation_is_cancellable_and_uses_the_overall_deadline(tmp_path, 
             _require(result.status_code == 200, "DNS preparation could not be cancelled")
         record = _wait(client, run_id)
         _require(record["outcome"] == ("cancelled" if ending == "cancel" else "timeout"), "DNS preparation produced the wrong terminal outcome")
-        _require(record["verdict"] == "inconclusive", "DNS failure satisfied an expected rejection")
+        _require(record["outcome"] in {"cancelled", "timeout"}, "DNS failure produced an authentication result")
         _require(time.monotonic() - started < 7, "The overall deadline did not bound DNS preparation")
         details = json.loads(resolver_ready.read_text())
         _require(_not_live(details["pid"]), "DNS preparation left a live resolver")
@@ -322,13 +322,14 @@ def test_tls_bounds_preserve_upstream_auto_and_enable_explicit_tls13(method, min
 
 def test_radius_attribute_file_preserves_unicode_and_delimiters():
     text = "é:' ,;\\$(not-a-command)"
-    target = TargetInput(name="Attribute review", host="127.0.0.1", nas_identifier=text, calling_station_id=text, nas_ip_address="192.0.2.44", extra_attributes=[
+    target = TargetInput(name="Attribute review", host="127.0.0.1", nas_identifier=text, nas_ip_address="192.0.2.44").model_dump(exclude={"secret"})
+    profile = ProfileInput(name="Attribute review", method="ttls-pap", calling_station_id=text, extra_attributes=[
         {"id": 18, "type": "string", "value": text},
         {"id": 27, "type": "integer", "value": "4294967295"},
         {"id": 33, "type": "hex", "value": "00ff80"},
         {"id": 8, "type": "ipaddr", "value": "192.0.2.45"},
-    ]).model_dump(exclude={"secret"})
-    content = radius_attribute_file(target, target["extra_attributes"])
+    ]).model_dump(exclude={"password"})
+    content = radius_attribute_file(target, profile["extra_attributes"], profile)
     rows = content.decode("ascii").splitlines()
     _require(len(rows) == 7 and content.endswith(b"\n"), "Attribute input altered private-file row boundaries")
     values = {}
@@ -516,7 +517,7 @@ def test_restart_recovers_queued_and_running_records_without_following_stale_lin
     try:
         for state in ("queued", "running"):
             record = recovered.get(ids[state])
-            _require(record["status"] == record["outcome"] == "interrupted" and record["verdict"] == "inconclusive", "Restart did not interrupt an unfinished record")
+            _require(record["status"] == record["outcome"] == "interrupted", "Restart did not interrupt an unfinished record")
             _require(record["finished_at"] is not None, "Restart recovery omitted a terminal timestamp")
         _require(recovered.get(ids["completed"])["outcome"] == "accept", "Restart changed an already completed result")
         _require(recovered.active_run_id is None, "Restart replayed an unfinished authentication")
@@ -719,21 +720,21 @@ def test_native_certificate_evidence_survives_the_execution_boundary(tmp_path, m
         footer = "EAPOL_TEST_RESULT accept=0 reject=1 timeout=0 mppe_ok=0 mppe_mismatch=1 cert_error=0"
         prefix = "print('CTRL-EVENT-EAP-TLS-CERT-ERROR reason=1 depth=0 untrusted diagnostic',flush=True)\n"
         ending = "raise SystemExit(252)\n"
-        expected_outcome, expected_verdict = "reject", "fail"
+        expected_outcome = "reject"
     else:
         footer = "EAPOL_TEST_RESULT accept=0 reject=0 timeout=0 mppe_ok=0 mppe_mismatch=0 cert_error=1"
         prefix = ""
         ending = "import os,signal\nos.kill(os.getpid(),signal.SIGTERM)\n" if mode == "signal" else "raise SystemExit(1)\n"
-        expected_outcome, expected_verdict = ("error", "inconclusive") if mode == "signal" else ("certificate_error", "pass")
+        expected_outcome = "error" if mode == "signal" else "certificate_error"
     binary = _program(tmp_path, "fixture-eapol", prefix + f"print({footer!r},flush=True)\nprint('FAILURE',flush=True)\n" + ending)
     app = create_app(_settings(tmp_path, binary))
     with TestClient(app) as client:
         _authenticate(client)
         target, profile, _ = _recipe(app.state.store, app.state.certificates)
-        response = client.post("/api/runs", json={"target_id": target["id"], "profile_id": profile["id"], "expected_outcome": "certificate_error"})
+        response = client.post("/api/runs", json={"target_id": target["id"], "profile_id": profile["id"]})
         _require(response.status_code == 200, "The native-evidence fixture run was not accepted")
         record = _wait(client, response.json()["id"])
-        _require(record["outcome"] == expected_outcome and record["verdict"] == expected_verdict, "The execution boundary misclassified native certificate evidence")
+        _require(record["outcome"] == expected_outcome, "The execution boundary misclassified native certificate evidence")
         if mode == "signal":
             _require(all(record[field] is None for field in ("radius_response", "peer_success", "mppe_keys_match")), "Signal termination retained authoritative evidence")
         _require(client.get("/api/status").json()["active_run_id"] is None, "The native-evidence fixture retained the active run slot")

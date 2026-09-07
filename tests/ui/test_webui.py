@@ -36,7 +36,7 @@ def profile(identifier="profile-1", method="peap-mschapv2"):
                 identity="operator@example.net", anonymous_identity="anonymous@example.net",
                 ca_certificate_id="trust-1", client_identity_id=None,
                 server_name="radius.example.net", tls_min_version="1.2", tls_max_version="auto",
-                fragment_size=1398, expected_outcome="accept",
+                fragment_size=1398, calling_station_id="02:00:00:00:00:01", extra_attributes=[],
                 allow_expired_client_certificate=False, has_password=True)
 
 
@@ -60,8 +60,7 @@ class MockAPI:
         self.urls = []
         self.targets = [dict(id="target-1", name="Lab RADIUS", host="radius.example.net",
                              port=1812, timeout_seconds=30, nas_identifier="eapol-test-kit",
-                             nas_ip_address=None, calling_station_id="02:00:00:00:00:01",
-                             extra_attributes=[], has_secret=True)]
+                             nas_ip_address=None, has_secret=True)]
         self.profiles = [profile()]
         self.certificates = [certificate(), certificate("ca-1", "ca", "Kit client issuer"),
                              certificate("identity-1", "identity", "Lab client"),
@@ -182,7 +181,7 @@ class MockAPI:
         if endpoint.startswith("/api/runs/"):
             saved = next(item for item in self.runs if item["id"] == endpoint.split("/")[3])
             if endpoint.endswith("/cancel"):
-                saved.update(status="cancelled", outcome="cancelled", verdict="inconclusive",
+                saved.update(status="cancelled", outcome="cancelled",
                              summary="The owned run was cancelled.", finished_at="2026-09-06T12:00:03Z",
                              duration_seconds=3, exit_code=-15)
                 return route.fulfill(content_type="application/json", json=saved)
@@ -202,8 +201,7 @@ class MockAPI:
                 return route.fulfill(content_type="application/json", json=self.runs)
             saved = dict(id="run-1", target_id=body["target_id"], profile_id=body["profile_id"],
                          target_name=self.targets[0]["name"], profile_name=self.profiles[0]["name"],
-                         status="running", outcome=None, verdict=None,
-                         expected_outcome=body.get("expected_outcome", "accept"),
+                         status="running", outcome=None,
                          summary="Waiting for observed authentication evidence.",
                          created_at="2026-09-06T12:00:00Z", started_at="2026-09-06T12:00:00Z",
                          finished_at=None, duration_seconds=None, exit_code=None,
@@ -228,7 +226,7 @@ class MockAPI:
                         return route.fulfill(status=204)
                     previous_attributes = saved.get("extra_attributes", [])
                     saved.update(body)
-                if collection == "targets" and "extra_attributes" in body:
+                if collection == "profiles" and "extra_attributes" in body:
                     saved["extra_attributes"] = self.save_attributes(body["extra_attributes"], previous_attributes)
                 for secret, flag in (("password", "has_password"), ("secret", "has_secret")):
                     if secret in saved:
@@ -321,7 +319,7 @@ class WebUITests(unittest.TestCase):
         self.mock.authenticated = False
         self.mock.setup_required = True
         self.page.goto(self.base_url)
-        expect(self.page.locator("#auth-title")).to_have_text("Make this workspace yours")
+        expect(self.page.locator("#auth-title")).to_have_text("Set password")
         self.screenshot("setup-desktop.png")
         self.page.locator("#auth-password").fill(self.mock.password)
         self.page.locator("#auth-confirm").fill(self.mock.password)
@@ -359,11 +357,9 @@ class WebUITests(unittest.TestCase):
         self.assertNotIn("id", update)
         self.assertNotIn("has_password", update)
         self.page.keyboard.press("Escape")
-        self.page.locator("#profile-list").get_by_role("button", name="Negative-test copy").click()
-        self.page.locator("#duplicate-expectation").select_option("certificate_error")
-        self.page.get_by_role("button", name="Create copy & edit").click()
+        self.page.locator("#profile-list").get_by_role("button", name="Duplicate", exact=True).click()
+        self.page.get_by_role("button", name="Duplicate", exact=True).nth(1).click()
         expect(self.page.locator("#profile-dialog")).to_be_visible()
-        expect(self.page.locator("#profile-expectation")).to_have_value("certificate_error")
         expect(self.page.locator("#profile-password-hint")).to_contain_text("A password is saved")
         self.assertTrue(self.mock.profiles[-1]["has_password"])
         self.page.keyboard.press("Escape")
@@ -387,16 +383,12 @@ class WebUITests(unittest.TestCase):
         self.page.locator("#target-name").fill("Edited target")
         self.page.locator("#target-form summary").click()
         self.page.locator("#target-nas-ip").fill("192.0.2.10")
-        self.page.locator("#add-attribute").click()
-        self.page.locator('[data-attribute="id"]').fill("6")
-        self.page.locator('[data-attribute="type"]').select_option("integer")
-        self.page.locator('[data-attribute="value"]').fill("2")
         self.page.get_by_role("button", name="Save target", exact=True).click()
         expect(self.page.locator("#target-dialog")).to_be_hidden()
         saved = self.mock.writes[-1][2]
         self.assertNotIn("secret", saved)
         self.assertNotIn("has_secret", saved)
-        self.assertEqual(saved["extra_attributes"], [dict(id=6, type="integer", sensitivity="public", value="2")])
+        self.assertEqual(saved["nas_ip_address"], "192.0.2.10")
         self.page.locator("#target-list").get_by_role("button", name="Edit", exact=True).click()
         self.page.locator("#target-secret").fill(secrets.token_urlsafe(30))
         self.mock.fail_next_write = True
@@ -414,12 +406,12 @@ class WebUITests(unittest.TestCase):
             dict(key="private-row", id=26, type="hex", sensitivity="private", has_value=True),
             dict(key="empty-row", id=19, type="string", sensitivity="public", has_value=True, value=""),
         ]
-        self.mock.targets[0]["extra_attributes"] = rows
+        self.mock.profiles[0]["extra_attributes"] = rows
         self.mock.attribute_values.update({"public-row": XSS, "private-row": old_private, "empty-row": ""})
         self.open()
-        self.nav("targets")
-        self.page.locator("#target-list").get_by_role("button", name="Edit", exact=True).click()
-        self.page.locator("#target-form summary").click()
+        self.nav("profiles")
+        self.page.locator("#profile-list").get_by_role("button", name="Edit", exact=True).click()
+        self.page.locator("#profile-form details").first.locator("summary").click()
         public = self.page.locator(".attribute-row").nth(0)
         private = self.page.locator(".attribute-row").nth(1)
         expect(public.locator(".attribute-saved")).to_contain_text(XSS)
@@ -429,16 +421,16 @@ class WebUITests(unittest.TestCase):
         expect(private.locator('[data-attribute="value"]')).to_be_disabled()
         expect(self.page.locator(".attribute-row").nth(2)).to_contain_text("(empty value)")
         self.assertTrue(old_private not in self.page.locator("body").inner_text(), "A stored private value appeared in the editor")
-        self.page.locator("#target-dialog").evaluate("element => element.scrollTop = 0")
+        self.page.locator("#profile-dialog").evaluate("element => element.scrollTop = 0")
         self.screenshot("attributes-desktop.png")
         self.page.set_viewport_size({"width": 390, "height": 844})
         self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= innerWidth"))
-        self.assertTrue(self.page.locator("#target-dialog").evaluate("element => element.scrollWidth <= element.clientWidth"))
+        self.assertTrue(self.page.locator("#profile-dialog").evaluate("element => element.scrollWidth <= element.clientWidth"))
         self.screenshot("attributes-mobile.png")
         self.page.set_viewport_size({"width": 1440, "height": 1000})
-        self.page.locator("#target-name").fill("Preserved attributes")
-        self.page.get_by_role("button", name="Save target", exact=True).click()
-        expect(self.page.locator("#target-dialog")).to_be_hidden()
+        self.page.locator("#profile-name").fill("Preserved attributes")
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
+        expect(self.page.locator("#profile-dialog")).to_be_hidden()
         submitted = self.mock.writes[-1][2]["extra_attributes"]
         self.assertEqual([row["key"] for row in submitted], ["public-row", "private-row", "empty-row"])
         self.assertTrue(all("value" not in row and "has_value" not in row for row in submitted))
@@ -449,16 +441,16 @@ class WebUITests(unittest.TestCase):
         private = self.page.locator(".attribute-row").nth(1)
         private.locator('[data-attribute="sensitivity"]').select_option("public")
         write_count = len(self.mock.writes)
-        self.page.get_by_role("button", name="Save target", exact=True).click()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
         self.assertEqual(len(self.mock.writes), write_count)
         private.locator('[data-attribute="replace"]').check()
         private.locator('[data-attribute="value"]').fill(new_public)
         self.assertEqual(private.locator('[data-attribute="value"]').get_attribute("type"), "password")
-        self.page.get_by_role("button", name="Save target", exact=True).click()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
         self.assertEqual(len(self.mock.writes), write_count)
         private.locator('[data-attribute="confirm-public"]').check()
-        self.page.get_by_role("button", name="Save target", exact=True).click()
-        expect(self.page.locator("#target-dialog")).to_be_hidden()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
+        expect(self.page.locator("#profile-dialog")).to_be_hidden()
         promoted = self.mock.writes[-1][2]["extra_attributes"][1]
         self.assertEqual(set(promoted), {"key", "id", "type", "sensitivity", "value"})
         self.assertTrue(promoted["value"] == new_public)
@@ -470,25 +462,25 @@ class WebUITests(unittest.TestCase):
         public_container = self.page.locator(".attribute-row").nth(1)
         expect(public_container.locator(".attribute-saved")).to_contain_text(new_public)
         expect(public_container.locator(".attribute-confirm")).to_be_hidden()
-        self.page.get_by_role("button", name="Save target", exact=True).click()
-        expect(self.page.locator("#target-dialog")).to_be_hidden()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
+        expect(self.page.locator("#profile-dialog")).to_be_hidden()
         self.assertNotIn("value", self.mock.writes[-1][2]["extra_attributes"][1])
         self.assertTrue(self.mock.attribute_values["private-row"] == new_public)
 
         self.page.locator("#target-list").get_by_role("button", name="Edit", exact=True).click()
         self.page.locator("#target-form summary").click()
         self.page.locator(".attribute-row").nth(1).locator('[data-attribute="sensitivity"]').select_option("private")
-        self.page.get_by_role("button", name="Save target", exact=True).click()
-        expect(self.page.locator("#target-dialog")).to_be_hidden()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
+        expect(self.page.locator("#profile-dialog")).to_be_hidden()
         self.assertNotIn("value", self.mock.writes[-1][2]["extra_attributes"][1])
-        self.assertNotIn("value", self.mock.targets[0]["extra_attributes"][1])
+        self.assertNotIn("value", self.mock.profiles[0]["extra_attributes"][1])
         self.assertTrue(self.mock.attribute_values["private-row"] == new_public)
 
     def test_opaque_defaults_empty_private_values_and_failed_submission_clearing(self):
         self.open()
-        self.nav("targets")
-        self.page.locator("#target-list").get_by_role("button", name="Edit", exact=True).click()
-        self.page.locator("#target-form summary").click()
+        self.nav("profiles")
+        self.page.locator("#profile-list").get_by_role("button", name="Edit", exact=True).click()
+        self.page.locator("#profile-form details").first.locator("summary").click()
         self.page.locator("#add-attribute").click()
         row = self.page.locator(".attribute-row").last
         row.locator('[data-attribute="id"]').fill("241")
@@ -498,35 +490,35 @@ class WebUITests(unittest.TestCase):
         row.locator('[data-attribute="replace"]').check()
         row.locator('[data-attribute="value"]').fill(secrets.token_hex(10))
         self.mock.fail_next_write = True
-        self.page.get_by_role("button", name="Save target", exact=True).click()
-        expect(self.page.locator("#target-form .form-error")).to_be_visible()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
+        expect(self.page.locator("#profile-form .form-error")).to_be_visible()
         expect(row.locator('[data-attribute="value"]')).to_have_value("")
         expect(row.locator('[data-attribute="replace"]')).not_to_be_checked()
         write_count = len(self.mock.writes)
-        self.page.get_by_role("button", name="Save target", exact=True).click()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
         self.assertEqual(len(self.mock.writes), write_count)
         row.locator('[data-attribute="id"]').fill("18")
         row.locator('[data-attribute="type"]').select_option("string")
         row.locator('[data-attribute="replace"]').check()
-        self.page.get_by_role("button", name="Save target", exact=True).click()
-        expect(self.page.locator("#target-dialog")).to_be_hidden()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
+        expect(self.page.locator("#profile-dialog")).to_be_hidden()
         submitted = self.mock.writes[-1][2]["extra_attributes"][0]
         self.assertEqual(submitted, dict(id=18, type="string", sensitivity="private", value=""))
-        self.assertTrue(self.mock.targets[0]["extra_attributes"][0]["has_value"])
-        self.assertNotIn("value", self.mock.targets[0]["extra_attributes"][0])
+        self.assertTrue(self.mock.profiles[0]["extra_attributes"][0]["has_value"])
+        self.assertNotIn("value", self.mock.profiles[0]["extra_attributes"][0])
 
     def test_attribute_payload_changes_require_replacement_and_reclassification(self):
-        self.mock.targets[0]["extra_attributes"] = [dict(key="opaque-public", id=26, type="hex", sensitivity="public", has_value=True, value="000001370102")]
+        self.mock.profiles[0]["extra_attributes"] = [dict(key="opaque-public", id=26, type="hex", sensitivity="public", has_value=True, value="000001370102")]
         self.mock.attribute_values["opaque-public"] = "000001370102"
         self.open()
-        self.nav("targets")
-        self.page.locator("#target-list").get_by_role("button", name="Edit", exact=True).click()
-        self.page.locator("#target-form summary").click()
+        self.nav("profiles")
+        self.page.locator("#profile-list").get_by_role("button", name="Edit", exact=True).click()
+        self.page.locator("#profile-form details").first.locator("summary").click()
         row = self.page.locator(".attribute-row").first
         row.locator('[data-attribute="type"]').select_option("string")
         expect(row.locator('[data-attribute="sensitivity"]')).to_have_value("private")
         write_count = len(self.mock.writes)
-        self.page.get_by_role("button", name="Save target", exact=True).click()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
         self.assertEqual(len(self.mock.writes), write_count)
         row.locator('[data-attribute="replace"]').check()
         row.locator('[data-attribute="value"]').fill("Deliberately public fixture value")
@@ -534,11 +526,11 @@ class WebUITests(unittest.TestCase):
         row.locator('[data-attribute="confirm-public"]').check()
         row.locator('[data-attribute="value"]').fill("Revised public fixture value")
         expect(row.locator('[data-attribute="confirm-public"]')).not_to_be_checked()
-        self.page.get_by_role("button", name="Save target", exact=True).click()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
         self.assertEqual(len(self.mock.writes), write_count)
         row.locator('[data-attribute="confirm-public"]').check()
-        self.page.get_by_role("button", name="Save target", exact=True).click()
-        expect(self.page.locator("#target-dialog")).to_be_hidden()
+        self.page.get_by_role("button", name="Save profile", exact=True).click()
+        expect(self.page.locator("#profile-dialog")).to_be_hidden()
         self.assertEqual(self.mock.writes[-1][2]["extra_attributes"], [dict(key="opaque-public", id=26, type="string", sensitivity="public", value="Revised public fixture value")])
 
         self.page.locator("#target-list").get_by_role("button", name="Edit", exact=True).click()
@@ -616,19 +608,17 @@ class WebUITests(unittest.TestCase):
     def test_live_run_bounded_text_logs_cancel_history_and_responsive_layout(self):
         self.open()
         self.screenshot("workbench-desktop.png")
-        self.page.locator("#run-expectation").select_option("reject")
         self.page.locator("#start-run").click()
         expect(self.page.locator("#run-log")).to_contain_text("1700", timeout=8000)
         expect(self.page.locator("#run-log img")).to_have_count(0)
         self.assertLessEqual(len(self.page.locator("#run-log").inner_text().splitlines()), 600)
         self.assertLessEqual(len(self.page.locator("#run-log").inner_text()), 120000)
         expect(self.page.locator("#start-run")).to_be_disabled()
-        expect(self.page.locator("#run-facts")).to_contain_text("reject")
+        expect(self.page.locator("#run-summary")).to_contain_text("Waiting")
         self.page.locator("#run-detail summary").click()
         expect(self.page.locator("#run-snapshot")).to_contain_text("redacted fixture")
         self.page.locator("#cancel-run").click()
         expect(self.page.locator("#run-badges")).to_contain_text("cancelled")
-        expect(self.page.locator("#run-badges")).to_contain_text("inconclusive")
         expect(self.page.locator("#cancel-run")).to_be_hidden()
         self.screenshot("run-result-desktop.png")
         with self.page.expect_download() as downloaded:

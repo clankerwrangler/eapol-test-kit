@@ -429,23 +429,24 @@ def test_migration_does_not_add_or_rewrite_absent_or_empty_lists(store):
     require(all(store.get("target", target["id"]) == target for target in targets))
 
 
-def test_public_target_is_the_shared_secret_free_target_shape(store):
+def test_public_profile_is_the_shared_secret_free_profile_shape(store):
+    from eapolkit.attributes import public_profile
     public_value, private_value = text_value(), text_value()
     rows = prepare_rows(store, [
         {"id": 32, "type": "string", "value": public_value},
         {"id": 1, "type": "string", "value": private_value, "sensitivity": "private"},
     ])
-    target = {"id": uuid4().hex, "name": text_value(), "has_secret": True,
-              "_secret": store.encrypt(text_value()), "extra_attributes": rows}
-    before = json.dumps(target)
-    read = public_target(store, target)
-    require(set(read) == {"id", "name", "has_secret", "extra_attributes"})
-    require(read["id"] == target["id"] and read["name"] == target["name"] and read["has_secret"] is True)
+    profile = {"id": uuid4().hex, "name": text_value(), "has_password": True,
+               "_password": store.encrypt(text_value()), "extra_attributes": rows}
+    before = json.dumps(profile)
+    read = public_profile(store, profile)
+    require(set(read) == {"id", "name", "has_password", "extra_attributes"})
+    require(read["id"] == profile["id"] and read["name"] == profile["name"] and read["has_password"] is True)
     require(read["extra_attributes"] == public_rows(store, rows))
     require(read["extra_attributes"][0]["value"] == public_value)
     require(private_value not in json.dumps(read) and "value" not in read["extra_attributes"][1],
-            "Private attribute reached the ordinary target serializer")
+            "Private attribute reached the ordinary profile serializer")
     require(all(row["_value"] not in json.dumps(read) for row in rows),
             "Encrypted attribute storage reached a read object")
-    require(json.dumps(target) == before, "Target serialization changed stored data")
-    require(public_target(store, {"id": uuid4().hex})["extra_attributes"] == [])
+    require(json.dumps(profile) == before, "Profile serialization changed stored data")
+    require(public_profile(store, {"id": uuid4().hex})["extra_attributes"] == [])

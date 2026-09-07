@@ -63,11 +63,9 @@ class TargetInput(InputModel):
     timeout_seconds: int = Field(default=30, ge=5, le=120)
     nas_identifier: str = Field(default="eapol-test-kit", max_length=253)
     nas_ip_address: str | None = None
-    calling_station_id: str = Field(default="02:00:00:00:00:01", max_length=253)
-    extra_attributes: list[RadiusAttribute] = Field(default_factory=list, max_length=32)
     secret: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
 
-    _name = field_validator("name", "nas_identifier", "calling_station_id")(printable)
+    _name = field_validator("name", "nas_identifier")(printable)
     _host = field_validator("host")(dns_or_ip)
 
     @field_validator("secret")
@@ -103,11 +101,12 @@ class ProfileInput(InputModel):
     tls_min_version: Literal["1.2", "1.3"] = "1.2"
     tls_max_version: Literal["auto", "1.2", "1.3"] = "auto"
     fragment_size: int = Field(default=1398, ge=100, le=65535)
-    expected_outcome: Outcome = "accept"
+    calling_station_id: str = Field(default="02:00:00:00:00:01", max_length=253)
+    extra_attributes: list[RadiusAttribute] = Field(default_factory=list, max_length=32)
     allow_expired_client_certificate: bool = False
     password: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
 
-    _name = field_validator("name")(printable)
+    _name = field_validator("name", "calling_station_id")(printable)
 
     @field_validator("server_name")
     @classmethod
@@ -155,13 +154,11 @@ class ExportInput(InputModel):
 
 class DuplicateInput(InputModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    expected_outcome: Outcome | None = None
 
 
 class RunInput(InputModel):
     target_id: str = Field(min_length=1, max_length=128)
     profile_id: str = Field(min_length=1, max_length=128)
-    expected_outcome: Outcome | None = None
 
 
 def presets() -> list[dict]:

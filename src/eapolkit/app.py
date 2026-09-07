@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .auth import Auth, COOKIE_NAME, SecurityMiddleware
-from .attributes import migrate_history, migrate_targets, prepare_rows, public_target
+from .attributes import migrate_history, migrate_records, prepare_rows, public_profile, public_target
 from .certificates import CertificateService
 from .configuration import preview
 from .models import CAInput, ClientInput, CSRInput, ExportInput, DuplicateInput, PasswordInput, ProfileInput, RunInput, TargetInput, presets
@@ -31,7 +31,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store = Store(settings.data_dir)
         runs = None
         try:
-            migrate_targets(store)
+            migrate_records(store, "target")
+            migrate_records(store, "profile")
             migrate_history(store)
             application.state.store = store
             application.state.auth = Auth(store, settings)
@@ -128,17 +129,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             elif encrypted_field in previous:
                 record[encrypted_field] = previous[encrypted_field]
             record["has_" + secret_name] = encrypted_field in record
-            if kind == "target":
+            if kind == "profile":
                 incoming = [row.model_dump(exclude_unset=True) for row in data.extra_attributes] if "extra_attributes" in data.model_fields_set else None
                 record["extra_attributes"] = prepare_rows(store, incoming, previous.get("extra_attributes", []))
-            else:
                 for field, kinds in (("ca_certificate_id", {"trust", "ca"}), ("client_identity_id", {"identity"})):
                     if record.get(field):
                         asset = store.get("certificate", record[field])
                         if asset["kind"] not in kinds:
                             raise HTTPException(422, "Certificate asset has the wrong purpose")
             store.put(kind, record)
-            return public_target(store, record) if kind == "target" else public(record)
+            return public_target(store, record) if kind == "target" else public_profile(store, record)
 
     @application.get("/api/targets")
     def targets(request: Request):
@@ -159,7 +159,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.get("/api/profiles")
     def profiles(request: Request):
-        return [public(record) for record in request.app.state.store.list("profile")]
+        return [public_profile(request.app.state.store, record) for record in request.app.state.store.list("profile")]
 
     @application.post("/api/profiles")
     def create_profile(data: ProfileInput, request: Request):
@@ -181,9 +181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             record = store.get("profile", object_id)
             record["id"] = secrets.token_hex(16)
             record["name"] = data.name if data and data.name is not None else record["name"][:113] + " (copy)"
-            if data and data.expected_outcome is not None:
-                record["expected_outcome"] = data.expected_outcome
-            return public(store.put("profile", record))
+            return public_profile(store, store.put("profile", record))
 
     @application.get("/api/profiles/{object_id}/preview")
     def configuration_preview(object_id: str, request: Request):
@@ -248,7 +246,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.post("/api/runs")
     async def create_run(data: RunInput, request: Request):
-        return await request.app.state.runs.start(data.target_id, data.profile_id, data.expected_outcome)
+        return await request.app.state.runs.start(data.target_id, data.profile_id)
 
     @application.get("/api/runs")
     def runs(request: Request, limit: int = Query(default=50, ge=1, le=100)):
